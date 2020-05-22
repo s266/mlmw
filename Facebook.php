@@ -1,589 +1,280 @@
-<?php
+<?php defined('BASEPATH') OR exit('No direct script access allowed');
 /**
- * Copyright 2014 Facebook, Inc.
+ * Facebook PHP SDK v5 for CodeIgniter 3.x
  *
- * You are hereby granted a non-exclusive, worldwide, royalty-free license to
- * use, copy, modify, and distribute this software in source code or binary
- * form for use in connection with the web services and APIs provided by
- * Facebook.
+ * Library for Facebook PHP SDK v5. It helps the user to login with their Facebook account
+ * in CodeIgniter application.
  *
- * As with any software that integrates with the Facebook platform, your use
- * of this software is subject to the Facebook Developer Principles and
- * Policies [http://developers.facebook.com/policy/]. This copyright notice
- * shall be included in all copies or substantial portions of the software.
+ * This library requires the Facebook PHP SDK v5 and it should be placed in libraries folder.
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * It also requires facebook configuration file and it should be placed in the config directory.
  *
+ * @package     CodeIgniter
+ * @category    Libraries
+ * @author      CodexWorld
+ * @license     http://www.codexworld.com/license/
+ * @link        http://www.codexworld.com
+ * @version     2.0
  */
-namespace Facebook;
 
+// Include the autoloader provided in the SDK
+require_once 'facebook-php-sdk/autoload.php'; 
+
+use Facebook\Facebook as FB;
 use Facebook\Authentication\AccessToken;
-use Facebook\Authentication\OAuth2Client;
-use Facebook\FileUpload\FacebookFile;
-use Facebook\FileUpload\FacebookVideo;
-use Facebook\GraphNodes\GraphEdge;
-use Facebook\Url\UrlDetectionInterface;
-use Facebook\Url\FacebookUrlDetectionHandler;
-use Facebook\PseudoRandomString\PseudoRandomStringGeneratorInterface;
-use Facebook\PseudoRandomString\McryptPseudoRandomStringGenerator;
-use Facebook\PseudoRandomString\OpenSslPseudoRandomStringGenerator;
-use Facebook\PseudoRandomString\UrandomPseudoRandomStringGenerator;
-use Facebook\HttpClients\FacebookHttpClientInterface;
-use Facebook\HttpClients\FacebookCurlHttpClient;
-use Facebook\HttpClients\FacebookStreamHttpClient;
-use Facebook\HttpClients\FacebookGuzzleHttpClient;
-use Facebook\PersistentData\PersistentDataInterface;
-use Facebook\PersistentData\FacebookSessionPersistentDataHandler;
-use Facebook\PersistentData\FacebookMemoryPersistentDataHandler;
-use Facebook\Helpers\FacebookCanvasHelper;
-use Facebook\Helpers\FacebookJavaScriptHelper;
-use Facebook\Helpers\FacebookPageTabHelper;
-use Facebook\Helpers\FacebookRedirectLoginHelper;
+use Facebook\Exceptions\FacebookResponseException;
 use Facebook\Exceptions\FacebookSDKException;
-
-/**
- * Class Facebook
- *
- * @package Facebook
- */
-class Facebook
+use Facebook\Helpers\FacebookJavaScriptHelper;
+use Facebook\Helpers\FacebookRedirectLoginHelper;
+Class Facebook
 {
     /**
-     * @const string Version number of the Facebook PHP SDK.
+     * @var FB
      */
-    const VERSION = '5.0.0';
+    private $fb;
+    /**
+     * @var FacebookRedirectLoginHelper|FacebookJavaScriptHelper
+     */
+    private $helper;
 
     /**
-     * @const string Default Graph API version for requests.
+     * Facebook constructor.
      */
-    const DEFAULT_GRAPH_VERSION = 'v2.4';
-
-    /**
-     * @const string The name of the environment variable that contains the app ID.
-     */
-    const APP_ID_ENV_NAME = 'FACEBOOK_APP_ID';
-
-    /**
-     * @const string The name of the environment variable that contains the app secret.
-     */
-    const APP_SECRET_ENV_NAME = 'FACEBOOK_APP_SECRET';
-
-    /**
-     * @var FacebookApp The FacebookApp entity.
-     */
-    protected $app;
-
-    /**
-     * @var FacebookClient The Facebook client service.
-     */
-    protected $client;
-
-    /**
-     * @var OAuth2Client The OAuth 2.0 client service.
-     */
-    protected $oAuth2Client;
-
-    /**
-     * @var UrlDetectionInterface|null The URL detection handler.
-     */
-    protected $urlDetectionHandler;
-
-    /**
-     * @var PseudoRandomStringGeneratorInterface|null The cryptographically secure pseudo-random string generator.
-     */
-    protected $pseudoRandomStringGenerator;
-
-    /**
-     * @var AccessToken|null The default access token to use with requests.
-     */
-    protected $defaultAccessToken;
-
-    /**
-     * @var string|null The default Graph version we want to use.
-     */
-    protected $defaultGraphVersion;
-
-    /**
-     * @var PersistentDataInterface|null The persistent data handler.
-     */
-    protected $persistentDataHandler;
-
-    /**
-     * @var FacebookResponse|FacebookBatchResponse|null Stores the last request made to Graph.
-     */
-    protected $lastResponse;
-
-    /**
-     * Instantiates a new Facebook super-class object.
-     *
-     * @param array $config
-     *
-     * @throws FacebookSDKException
-     */
-    public function __construct(array $config = [])
-    {
-        $appId = isset($config['app_id']) ? $config['app_id'] : getenv(static::APP_ID_ENV_NAME);
-        if (!$appId) {
-            throw new FacebookSDKException('Required "app_id" key not supplied in config and could not find fallback environment variable "' . static::APP_ID_ENV_NAME . '"');
+    public function __construct(){
+        // Load fb config
+        $this->load->config('facebook');
+        // Load required libraries and helpers
+        $this->load->library('session');
+        $this->load->helper('url');
+        if (!isset($this->fb)){
+            $this->fb = new FB([
+                'app_id'                => $this->config->item('facebook_app_id'),
+                'app_secret'            => $this->config->item('facebook_app_secret'),
+                'default_graph_version' => $this->config->item('facebook_graph_version')
+            ]);
         }
-
-        $appSecret = isset($config['app_secret']) ? $config['app_secret'] : getenv(static::APP_SECRET_ENV_NAME);
-        if (!$appSecret) {
-            throw new FacebookSDKException('Required "app_secret" key not supplied in config and could not find fallback environment variable "' . static::APP_SECRET_ENV_NAME . '"');
+        // Load correct helper depending on login type
+        // set in the config file
+        switch ($this->config->item('facebook_login_type')){
+            case 'js':
+                $this->helper = $this->fb->getJavaScriptHelper();
+                break;
+            case 'canvas':
+                $this->helper = $this->fb->getCanvasHelper();
+                break;
+            case 'page_tab':
+                $this->helper = $this->fb->getPageTabHelper();
+                break;
+            case 'web':
+                $this->helper = $this->fb->getRedirectLoginHelper();
+                break;
         }
-
-        $this->app = new FacebookApp($appId, $appSecret);
-
-        $httpClientHandler = null;
-        if (isset($config['http_client_handler'])) {
-            if ($config['http_client_handler'] instanceof FacebookHttpClientInterface) {
-                $httpClientHandler = $config['http_client_handler'];
-            } elseif ($config['http_client_handler'] === 'curl') {
-                $httpClientHandler = new FacebookCurlHttpClient();
-            } elseif ($config['http_client_handler'] === 'stream') {
-                $httpClientHandler = new FacebookStreamHttpClient();
-            } elseif ($config['http_client_handler'] === 'guzzle') {
-                $httpClientHandler = new FacebookGuzzleHttpClient();
-            } else {
-                throw new \InvalidArgumentException('The http_client_handler must be set to "curl", "stream", "guzzle", or be an instance of Facebook\HttpClients\FacebookHttpClientInterface');
-            }
-        }
-
-        $enableBeta = isset($config['enable_beta_mode']) && $config['enable_beta_mode'] === true;
-        $this->client = new FacebookClient($httpClientHandler, $enableBeta);
-
-        if (isset($config['url_detection_handler'])) {
-            if ($config['url_detection_handler'] instanceof UrlDetectionInterface) {
-                $this->urlDetectionHandler = $config['url_detection_handler'];
-            } else {
-                throw new \InvalidArgumentException('The url_detection_handler must be an instance of Facebook\Url\UrlDetectionInterface');
-            }
-        }
-
-        if (isset($config['pseudo_random_string_generator'])) {
-            if ($config['pseudo_random_string_generator'] instanceof PseudoRandomStringGeneratorInterface) {
-                $this->pseudoRandomStringGenerator = $config['pseudo_random_string_generator'];
-            } elseif ($config['pseudo_random_string_generator'] === 'mcrypt') {
-                $this->pseudoRandomStringGenerator = new McryptPseudoRandomStringGenerator();
-            } elseif ($config['pseudo_random_string_generator'] === 'openssl') {
-                $this->pseudoRandomStringGenerator = new OpenSslPseudoRandomStringGenerator();
-            } elseif ($config['pseudo_random_string_generator'] === 'urandom') {
-                $this->pseudoRandomStringGenerator = new UrandomPseudoRandomStringGenerator();
-            } else {
-                throw new \InvalidArgumentException('The pseudo_random_string_generator must be set to "mcrypt", "openssl", or "urandom", or be an instance of Facebook\PseudoRandomString\PseudoRandomStringGeneratorInterface');
-            }
-        }
-
-        if (isset($config['persistent_data_handler'])) {
-            if ($config['persistent_data_handler'] instanceof PersistentDataInterface) {
-                $this->persistentDataHandler = $config['persistent_data_handler'];
-            } elseif ($config['persistent_data_handler'] === 'session') {
-                $this->persistentDataHandler = new FacebookSessionPersistentDataHandler();
-            } elseif ($config['persistent_data_handler'] === 'memory') {
-                $this->persistentDataHandler = new FacebookMemoryPersistentDataHandler();
-            } else {
-                throw new \InvalidArgumentException('The persistent_data_handler must be set to "session", "memory", or be an instance of Facebook\PersistentData\PersistentDataInterface');
-            }
-        }
-
-        if (isset($config['default_access_token'])) {
-            $this->setDefaultAccessToken($config['default_access_token']);
-        }
-
-        if (isset($config['default_graph_version'])) {
-            $this->defaultGraphVersion = $config['default_graph_version'];
-        } else {
-            // @todo v6: Throw an InvalidArgumentException if "default_graph_version" is not set
-            $this->defaultGraphVersion = static::DEFAULT_GRAPH_VERSION;
+        if ($this->config->item('facebook_auth_on_load') === TRUE){
+            // Try and authenticate the user right away (get valid access token)
+            $this->authenticate();
         }
     }
-
+    
     /**
-     * Returns the FacebookApp entity.
-     *
-     * @return FacebookApp
+     * @return FB
      */
-    public function getApp()
-    {
-        return $this->app;
+    public function object(){
+        return $this->fb;
     }
-
+    
     /**
-     * Returns the FacebookClient service.
+     * Check whether the user is logged in.
+     * by access token
      *
-     * @return FacebookClient
+     * @return mixed|boolean
      */
-    public function getClient()
-    {
-        return $this->client;
-    }
-
-    /**
-     * Returns the OAuth 2.0 client service.
-     *
-     * @return OAuth2Client
-     */
-    public function getOAuth2Client()
-    {
-        if (!$this->oAuth2Client instanceof OAuth2Client) {
-            $app = $this->getApp();
-            $client = $this->getClient();
-            $this->oAuth2Client = new OAuth2Client($app, $client, $this->defaultGraphVersion);
+    public function is_authenticated(){
+        $access_token = $this->authenticate();
+        if(isset($access_token)){
+            return $access_token;
         }
-
-        return $this->oAuth2Client;
+        return false;
     }
-
+    
     /**
-     * Returns the last response returned from Graph.
+     * Do Graph request
      *
-     * @return FacebookResponse|FacebookBatchResponse|null
-     */
-    public function getLastResponse()
-    {
-        return $this->lastResponse;
-    }
-
-    /**
-     * Returns the URL detection handler.
+     * @param       $method
+     * @param       $endpoint
+     * @param array $params
+     * @param null  $access_token
      *
-     * @return UrlDetectionInterface
+     * @return array
      */
-    public function getUrlDetectionHandler()
-    {
-        if (!$this->urlDetectionHandler instanceof UrlDetectionInterface) {
-            $this->urlDetectionHandler = new FacebookUrlDetectionHandler();
+    public function request($method, $endpoint, $params = [], $access_token = null){
+        try{
+            $response = $this->fb->{strtolower($method)}($endpoint, $params, $access_token);
+            return $response->getDecodedBody();
+        }catch(FacebookResponseException $e){
+            return $this->logError($e->getCode(), $e->getMessage());
+        }catch (FacebookSDKException $e){
+            return $this->logError($e->getCode(), $e->getMessage());
         }
-
-        return $this->urlDetectionHandler;
     }
-
+    
     /**
-     * Returns the default AccessToken entity.
+     * Generate Facebook login url for web
      *
-     * @return AccessToken|null
+     * @return  string
      */
-    public function getDefaultAccessToken()
-    {
-        return $this->defaultAccessToken;
-    }
-
-    /**
-     * Sets the default access token to use with requests.
-     *
-     * @param AccessToken|string $accessToken The access token to save.
-     *
-     * @throws \InvalidArgumentException
-     */
-    public function setDefaultAccessToken($accessToken)
-    {
-        if (is_string($accessToken)) {
-            $this->defaultAccessToken = new AccessToken($accessToken);
-
-            return;
+    public function login_url(){
+        // Login type must be web, else return empty string
+        if($this->config->item('facebook_login_type') != 'web'){
+            return '';
         }
-
-        if ($accessToken instanceof AccessToken) {
-            $this->defaultAccessToken = $accessToken;
-
-            return;
-        }
-
-        throw new \InvalidArgumentException('The default access token must be of type "string" or Facebook\AccessToken');
+        // Get login url
+        return $this->helper->getLoginUrl(
+            base_url() . $this->config->item('facebook_login_redirect_url'),
+            $this->config->item('facebook_permissions')
+        );
     }
-
+    
     /**
-     * Returns the default Graph version.
+     * Generate Facebook logout url for web
      *
      * @return string
      */
-    public function getDefaultGraphVersion()
-    {
-        return $this->defaultGraphVersion;
-    }
-
-    /**
-     * Returns the redirect login helper.
-     *
-     * @return FacebookRedirectLoginHelper
-     */
-    public function getRedirectLoginHelper()
-    {
-        return new FacebookRedirectLoginHelper(
-            $this->getOAuth2Client(),
-            $this->persistentDataHandler,
-            $this->urlDetectionHandler,
-            $this->pseudoRandomStringGenerator
-        );
-    }
-
-    /**
-     * Returns the JavaScript helper.
-     *
-     * @return FacebookJavaScriptHelper
-     */
-    public function getJavaScriptHelper()
-    {
-        return new FacebookJavaScriptHelper($this->app, $this->client, $this->defaultGraphVersion);
-    }
-
-    /**
-     * Returns the canvas helper.
-     *
-     * @return FacebookCanvasHelper
-     */
-    public function getCanvasHelper()
-    {
-        return new FacebookCanvasHelper($this->app, $this->client, $this->defaultGraphVersion);
-    }
-
-    /**
-     * Returns the page tab helper.
-     *
-     * @return FacebookPageTabHelper
-     */
-    public function getPageTabHelper()
-    {
-        return new FacebookPageTabHelper($this->app, $this->client, $this->defaultGraphVersion);
-    }
-
-    /**
-     * Sends a GET request to Graph and returns the result.
-     *
-     * @param string                  $endpoint
-     * @param AccessToken|string|null $accessToken
-     * @param string|null             $eTag
-     * @param string|null             $graphVersion
-     *
-     * @return FacebookResponse
-     *
-     * @throws FacebookSDKException
-     */
-    public function get($endpoint, $accessToken = null, $eTag = null, $graphVersion = null)
-    {
-        return $this->sendRequest(
-            'GET',
-            $endpoint,
-            $params = [],
-            $accessToken,
-            $eTag,
-            $graphVersion
-        );
-    }
-
-    /**
-     * Sends a POST request to Graph and returns the result.
-     *
-     * @param string                  $endpoint
-     * @param array                   $params
-     * @param AccessToken|string|null $accessToken
-     * @param string|null             $eTag
-     * @param string|null             $graphVersion
-     *
-     * @return FacebookResponse
-     *
-     * @throws FacebookSDKException
-     */
-    public function post($endpoint, array $params = [], $accessToken = null, $eTag = null, $graphVersion = null)
-    {
-        return $this->sendRequest(
-            'POST',
-            $endpoint,
-            $params,
-            $accessToken,
-            $eTag,
-            $graphVersion
-        );
-    }
-
-    /**
-     * Sends a DELETE request to Graph and returns the result.
-     *
-     * @param string                  $endpoint
-     * @param array                   $params
-     * @param AccessToken|string|null $accessToken
-     * @param string|null             $eTag
-     * @param string|null             $graphVersion
-     *
-     * @return FacebookResponse
-     *
-     * @throws FacebookSDKException
-     */
-    public function delete($endpoint, array $params = [], $accessToken = null, $eTag = null, $graphVersion = null)
-    {
-        return $this->sendRequest(
-            'DELETE',
-            $endpoint,
-            $params,
-            $accessToken,
-            $eTag,
-            $graphVersion
-        );
-    }
-
-    /**
-     * Sends a request to Graph for the next page of results.
-     *
-     * @param GraphEdge $graphEdge The GraphEdge to paginate over.
-     *
-     * @return GraphEdge|null
-     *
-     * @throws FacebookSDKException
-     */
-    public function next(GraphEdge $graphEdge)
-    {
-        return $this->getPaginationResults($graphEdge, 'next');
-    }
-
-    /**
-     * Sends a request to Graph for the previous page of results.
-     *
-     * @param GraphEdge $graphEdge The GraphEdge to paginate over.
-     *
-     * @return GraphEdge|null
-     *
-     * @throws FacebookSDKException
-     */
-    public function previous(GraphEdge $graphEdge)
-    {
-        return $this->getPaginationResults($graphEdge, 'previous');
-    }
-
-    /**
-     * Sends a request to Graph for the next page of results.
-     *
-     * @param GraphEdge $graphEdge The GraphEdge to paginate over.
-     * @param string    $direction The direction of the pagination: next|previous.
-     *
-     * @return GraphEdge|null
-     *
-     * @throws FacebookSDKException
-     */
-    public function getPaginationResults(GraphEdge $graphEdge, $direction)
-    {
-        $paginationRequest = $graphEdge->getPaginationRequest($direction);
-        if (!$paginationRequest) {
-            return null;
+    public function logout_url(){
+        // Login type must be web, else return empty string
+        if($this->config->item('facebook_login_type') != 'web'){
+            return '';
         }
-
-        $this->lastResponse = $this->client->sendRequest($paginationRequest);
-
-        // Keep the same GraphNode subclass
-        $subClassName = $graphEdge->getSubClassName();
-        $graphEdge = $this->lastResponse->getGraphEdge($subClassName, false);
-
-        return count($graphEdge) > 0 ? $graphEdge : null;
-    }
-
-    /**
-     * Sends a request to Graph and returns the result.
-     *
-     * @param string                  $method
-     * @param string                  $endpoint
-     * @param array                   $params
-     * @param AccessToken|string|null $accessToken
-     * @param string|null             $eTag
-     * @param string|null             $graphVersion
-     *
-     * @return FacebookResponse
-     *
-     * @throws FacebookSDKException
-     */
-    public function sendRequest($method, $endpoint, array $params = [], $accessToken = null, $eTag = null, $graphVersion = null)
-    {
-        $accessToken = $accessToken ?: $this->defaultAccessToken;
-        $graphVersion = $graphVersion ?: $this->defaultGraphVersion;
-        $request = $this->request($method, $endpoint, $params, $accessToken, $eTag, $graphVersion);
-
-        return $this->lastResponse = $this->client->sendRequest($request);
-    }
-
-    /**
-     * Sends a batched request to Graph and returns the result.
-     *
-     * @param array                   $requests
-     * @param AccessToken|string|null $accessToken
-     * @param string|null             $graphVersion
-     *
-     * @return FacebookBatchResponse
-     *
-     * @throws FacebookSDKException
-     */
-    public function sendBatchRequest(array $requests, $accessToken = null, $graphVersion = null)
-    {
-        $accessToken = $accessToken ?: $this->defaultAccessToken;
-        $graphVersion = $graphVersion ?: $this->defaultGraphVersion;
-        $batchRequest = new FacebookBatchRequest(
-            $this->app,
-            $requests,
-            $accessToken,
-            $graphVersion
-        );
-
-        return $this->lastResponse = $this->client->sendBatchRequest($batchRequest);
-    }
-
-    /**
-     * Instantiates a new FacebookRequest entity.
-     *
-     * @param string                  $method
-     * @param string                  $endpoint
-     * @param array                   $params
-     * @param AccessToken|string|null $accessToken
-     * @param string|null             $eTag
-     * @param string|null             $graphVersion
-     *
-     * @return FacebookRequest
-     *
-     * @throws FacebookSDKException
-     */
-    public function request($method, $endpoint, array $params = [], $accessToken = null, $eTag = null, $graphVersion = null)
-    {
-        $accessToken = $accessToken ?: $this->defaultAccessToken;
-        $graphVersion = $graphVersion ?: $this->defaultGraphVersion;
-
-        return new FacebookRequest(
-            $this->app,
-            $accessToken,
-            $method,
-            $endpoint,
-            $params,
-            $eTag,
-            $graphVersion
+        // Get logout url
+        return $this->helper->getLogoutUrl(
+            $this->get_access_token(),
+            base_url() . $this->config->item('facebook_logout_redirect_url')
         );
     }
-
+    
     /**
-     * Factory to create FacebookFile's.
-     *
-     * @param string $pathToFile
-     *
-     * @return FacebookFile
-     *
-     * @throws FacebookSDKException
+     * Destroy local Facebook session
      */
-    public function fileToUpload($pathToFile)
-    {
-        return new FacebookFile($pathToFile);
+    public function destroy_session(){
+        $this->session->unset_userdata('fb_access_token');
     }
-
+    
     /**
-     * Factory to create FacebookVideo's.
+     * Get a new access token from Facebook
      *
-     * @param string $pathToFile
-     *
-     * @return FacebookVideo
-     *
-     * @throws FacebookSDKException
+     * @return array|AccessToken|null|object|void
      */
-    public function videoToUpload($pathToFile)
-    {
-        return new FacebookVideo($pathToFile);
+    private function authenticate(){
+        $access_token = $this->get_access_token();
+        if($access_token && $this->get_expire_time() > (time() + 30) || $access_token && !$this->get_expire_time()){
+            $this->fb->setDefaultAccessToken($access_token);
+            return $access_token;
+        }
+        // If we did not have a stored access token or if it has expired, try get a new access token
+        if(!$access_token){
+            try{
+                $access_token = $this->helper->getAccessToken();
+            }catch (FacebookSDKException $e){
+                $this->logError($e->getCode(), $e->getMessage());
+                return null;
+            }
+            // If we got a session we need to exchange it for a long lived session.
+            if(isset($access_token)){
+                $access_token = $this->long_lived_token($access_token);
+                $this->set_expire_time($access_token->getExpiresAt());
+                $this->set_access_token($access_token);
+                $this->fb->setDefaultAccessToken($access_token);
+                return $access_token;
+            }
+        }
+        // Collect errors if any when using web redirect based login
+        if($this->config->item('facebook_login_type') === 'web'){
+            if($this->helper->getError()){
+                // Collect error data
+                $error = array(
+                    'error'             => $this->helper->getError(),
+                    'error_code'        => $this->helper->getErrorCode(),
+                    'error_reason'      => $this->helper->getErrorReason(),
+                    'error_description' => $this->helper->getErrorDescription()
+                );
+                return $error;
+            }
+        }
+        return $access_token;
+    }
+    
+    /**
+     * Exchange short lived token for a long lived token
+     *
+     * @param AccessToken $access_token
+     *
+     * @return AccessToken|null
+     */
+    private function long_lived_token(AccessToken $access_token){
+        if(!$access_token->isLongLived()){
+            $oauth2_client = $this->fb->getOAuth2Client();
+            try{
+                return $oauth2_client->getLongLivedAccessToken($access_token);
+            }catch (FacebookSDKException $e){
+                $this->logError($e->getCode(), $e->getMessage());
+                return null;
+            }
+        }
+        return $access_token;
+    }
+    
+    /**
+     * Get stored access token
+     *
+     * @return mixed
+     */
+    private function get_access_token(){
+        return $this->session->userdata('fb_access_token');
+    }
+    
+    /**
+     * Store access token
+     *
+     * @param AccessToken $access_token
+     */
+    private function set_access_token(AccessToken $access_token){
+        $this->session->set_userdata('fb_access_token', $access_token->getValue());
+    }
+    
+    /**
+     * @return mixed
+     */
+    private function get_expire_time(){
+        return $this->session->userdata('fb_expire');
+    }
+    
+    /**
+     * @param DateTime $time
+     */
+    private function set_expire_time(DateTime $time = null){
+        if ($time) {
+            $this->session->set_userdata('fb_expire', $time->getTimestamp());
+        }
+    }
+    
+    /**
+     * @param $code
+     * @param $message
+     *
+     * @return array
+     */
+    private function logError($code, $message){
+        log_message('error', '[FACEBOOK PHP SDK] code: ' . $code.' | message: '.$message);
+        return ['error' => $code, 'message' => $message];
+    }
+    
+    /**
+     * Enables the use of CI super-global without having to define an extra variable.
+     *
+     * @param $var
+     *
+     * @return mixed
+     */
+    public function __get($var){
+        return get_instance()->$var;
     }
 }
